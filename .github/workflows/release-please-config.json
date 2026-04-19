@@ -1,0 +1,14 @@
+{
+  "packages": {
+    "agentforge-web": {
+      "release-type": "node",
+      "package-name": "agentforge-web",
+      "changelog-path": "CHANGELOG.md"
+    }
+  },
+  "plugins": [
+    {
+      "type": "sentence-case"
+    }
+  ]
+}
