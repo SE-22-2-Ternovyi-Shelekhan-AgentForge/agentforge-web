@@ -9,6 +9,7 @@ export default function TeamsPage() {
   const [newTeamName, setNewTeamName] = useState('');
   const [agentForms, setAgentForms] = useState({}); // teamId -> agent draft
   const [editing, setEditing] = useState(null); // agent being edited (with tools as string)
+  const [renaming, setRenaming] = useState(null); // { id, value } | null
 
   async function load() {
     try {
@@ -31,6 +32,32 @@ export default function TeamsPage() {
       await load();
     } catch (e2) {
       setError(e2.message);
+    }
+  }
+
+  async function renameTeam(team, e) {
+    e?.preventDefault();
+    const name = (renaming?.value || '').trim();
+    if (!name || name === team.name) {
+      setRenaming(null);
+      return;
+    }
+    try {
+      await api.updateTeam({ ...team, name });
+      setRenaming(null);
+      await load();
+    } catch (e2) {
+      setError(e2.message);
+    }
+  }
+
+  async function removeTeam(team) {
+    if (!window.confirm(`Видалити команду «${team.name}» разом з її агентами?`)) return;
+    try {
+      await api.deleteTeam(team.agentTeamId);
+      await load();
+    } catch (e) {
+      setError(e.message);
     }
   }
 
@@ -136,9 +163,44 @@ export default function TeamsPage() {
           const draft = draftFor(team.agentTeamId);
           return (
             <div key={team.agentTeamId} className="card bg-black border-secondary mb-4">
-              <div className="card-header border-secondary d-flex justify-content-between align-items-center">
-                <span className="fw-bold">{team.name}</span>
-                <span className="badge bg-primary">{team.agents?.length || 0} агентів</span>
+              <div className="card-header border-secondary d-flex justify-content-between align-items-center gap-2">
+                {renaming?.id === team.agentTeamId ? (
+                  <form className="d-flex gap-2 flex-grow-1" onSubmit={(e) => renameTeam(team, e)}>
+                    <input
+                      autoFocus
+                      className="form-control form-control-sm"
+                      value={renaming.value}
+                      onChange={(e) => setRenaming({ id: team.agentTeamId, value: e.target.value })}
+                      onKeyDown={(e) => e.key === 'Escape' && setRenaming(null)}
+                    />
+                    <button className="btn btn-sm btn-primary text-nowrap">Зберегти</button>
+                    <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => setRenaming(null)}>
+                      Скасувати
+                    </button>
+                  </form>
+                ) : (
+                  <>
+                    <span className="fw-bold text-truncate">{team.name}</span>
+                    <div className="d-flex align-items-center gap-2">
+                      <span className="badge bg-primary">{team.agents?.length || 0} агентів</span>
+                      <button
+                        className="btn btn-sm btn-link af-muted p-0"
+                        title="Перейменувати команду"
+                        onClick={() => setRenaming({ id: team.agentTeamId, value: team.name })}
+                      >
+                        ✎
+                      </button>
+                      <button
+                        className="btn btn-sm btn-link p-0"
+                        style={{ color: 'var(--af-danger)' }}
+                        title="Видалити команду"
+                        onClick={() => removeTeam(team)}
+                      >
+                        🗑
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
               <div className="card-body">
                 {(team.agents || []).length === 0 && (

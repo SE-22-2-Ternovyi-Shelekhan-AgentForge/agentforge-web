@@ -69,6 +69,7 @@ export const api = {
   createTeam: (name) =>
     request('/api/agents/teams', { method: 'POST', body: { name, conversationId: EMPTY_GUID } }),
   updateTeam: (team) => request(`/api/agents/teams/${team.agentTeamId}`, { method: 'PUT', body: team }),
+  deleteTeam: (id) => request(`/api/agents/teams/${id}`, { method: 'DELETE' }),
   createAgent: (agent) => request('/api/agents/create', { method: 'POST', body: agent }),
   updateAgent: (agent) => request('/api/agents/update', { method: 'PUT', body: agent }),
   deleteAgent: (id) => request(`/api/agents/${id}`, { method: 'DELETE' }),

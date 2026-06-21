@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
+import Markdown from './Markdown.jsx';
+import { prettyName, stripRolePrefix } from './agentDisplay.js';
 
 export default function TraceModal({ sessionId, onClose }) {
   const [trace, setTrace] = useState(null);
@@ -56,12 +58,12 @@ export default function TraceModal({ sessionId, onClose }) {
               {(trace.trace || []).map((step, i) => (
                 <div key={i} className="border-bottom border-secondary py-2">
                   <div className="d-flex justify-content-between">
-                    <span className="fw-medium text-primary">{step.agentRole}</span>
+                    <span className="fw-medium" style={{ color: '#b9a8ff' }}>{prettyName(step.agentRole)}</span>
                     <span className="text-secondary small">
                       {step.tokensIn ?? '—'}/{step.tokensOut ?? '—'} ток.
                     </span>
                   </div>
-                  <div style={{ whiteSpace: 'pre-wrap' }}>{step.output}</div>
+                  <Markdown>{stripRolePrefix(step.output, step.agentRole)}</Markdown>
                   {step.toolsUsed?.length > 0 && (
                     <div className="text-secondary small mt-1">
                       Інструменти: {step.toolsUsed.join(', ')}
