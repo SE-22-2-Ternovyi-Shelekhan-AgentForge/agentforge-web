@@ -30,10 +30,13 @@ export default function RegisterPage() {
 
   return (
     <div
-      className="bg-dark text-white min-vh-100 d-flex justify-content-center align-items-center"
-      style={{ background: 'radial-gradient(circle at center, #1a1d24 0%, #05070a 100%)' }}
+      className="text-white min-vh-100 d-flex justify-content-center align-items-center p-3"
+      style={{
+        background:
+          'radial-gradient(700px 480px at 50% 12%, rgba(124,92,255,0.18), transparent 60%), radial-gradient(600px 420px at 80% 100%, rgba(77,159,255,0.14), transparent 60%), #070912',
+      }}
     >
-      <div className="card bg-black border-secondary shadow-lg" style={{ width: '100%', maxWidth: 400 }}>
+      <div className="card af-glass shadow-lg af-fade-in" style={{ width: '100%', maxWidth: 400 }}>
         <div className="card-body p-4">
           <div className="text-center mb-4">
             <img src={icon} alt="Logo" width="40" height="40" className="mb-2" />

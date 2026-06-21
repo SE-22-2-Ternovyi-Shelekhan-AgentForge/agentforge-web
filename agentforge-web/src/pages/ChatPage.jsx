@@ -1,9 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import * as signalR from '@microsoft/signalr';
 import { api, API_BASE, getToken } from '../api';
 import { useAuth } from '../auth-context.js';
 import TraceModal from '../components/TraceModal.jsx';
 import ChatModal from '../components/ChatModal.jsx';
+import Markdown from '../components/Markdown.jsx';
+import {
+  agentGradient,
+  agentGlyph,
+  prettyName,
+  stripRolePrefix,
+  roleFromTagged,
+  isSummaryRole,
+} from '../components/agentDisplay.js';
 
 export default function ChatPage() {
   const { user } = useAuth();
@@ -12,7 +22,8 @@ export default function ChatPage() {
   const [details, setDetails] = useState(null);
   const [teams, setTeams] = useState([]);
   const [input, setInput] = useState('');
-  const [status, setStatus] = useState(null);
+  // Currently-working agent shown in the typing indicator: { name } | null.
+  const [activeAgent, setActiveAgent] = useState(null);
   const [error, setError] = useState(null);
   const [sending, setSending] = useState(false);
   // Whether the user manually dismissed the "waiting for agents" lock (escape
@@ -45,7 +56,7 @@ export default function ChatPage() {
       return;
     }
     let cancelled = false;
-    setStatus(null);
+    setActiveAgent(null);
     setOverridePending(false);
     api
       .chatDetails(activeId)
@@ -64,7 +75,7 @@ export default function ChatPage() {
       .build();
 
     conn.on('MessageAppended', (msg) => {
-      setStatus(null);
+      setActiveAgent(null);
       // Appending the assistant reply makes the last message non-user, which
       // clears the derived "waiting" lock automatically.
       setDetails((prev) =>
@@ -75,12 +86,14 @@ export default function ChatPage() {
     });
 
     conn.on('SessionEvent', (evt) => {
-      const who = evt?.agentRole ? `${evt.agentRole}` : 'Агенти';
-      setStatus(`${who} працює…`);
+      // The orchestrator DTO tags this field as `agent_role` (JsonPropertyName),
+      // so accept both spellings. Surface the working agent in the typing chip.
+      const role = evt?.agentRole ?? evt?.agent_role ?? null;
+      setActiveAgent(role ? { key: role, name: prettyName(role) } : { key: null, name: null });
     });
 
     conn.on('SessionFailed', (err) => {
-      setStatus(null);
+      setActiveAgent(null);
       // The orchestrator persists a system message on failure but only pushes
       // the SessionFailed event. Mirror that message locally so the chat (and
       // the derived lock) matches what a page reload would show.
@@ -131,7 +144,7 @@ export default function ChatPage() {
   // Auto-scroll to the latest message.
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [details?.messages, status]);
+  }, [details?.messages, activeAgent]);
 
   async function onChatSaved(id) {
     setModalChat(null);
@@ -171,7 +184,7 @@ export default function ChatPage() {
         prev ? { ...prev, messages: [...prev.messages, res.message] } : prev,
       );
       setInput('');
-      setStatus('Агенти працюють…');
+      setActiveAgent({ key: null, name: null }); // generic "team is working" until first event
       setOverridePending(false); // a fresh request — re-arm the waiting lock
     } catch (e2) {
       setError(e2.message);
@@ -197,33 +210,37 @@ export default function ChatPage() {
     <div className="d-flex w-100" style={{ minHeight: 0 }}>
       {/* Sidebar */}
       <aside
-        className="border-end border-secondary d-flex flex-column"
-        style={{ width: 280, backgroundColor: '#0a0c12' }}
+        className="af-glass d-flex flex-column"
+        style={{ width: 290, flex: '0 0 290px' }}
       >
-        <div className="p-3 border-bottom border-secondary">
+        <div className="p-3">
           <button className="btn btn-primary w-100 fw-bold" onClick={() => setModalChat('new')}>
-            + Нова розмова
+            <span className="me-1">＋</span> Нова розмова
           </button>
         </div>
-        <div className="flex-grow-1 overflow-auto">
+        <div className="px-3 pb-1 text-uppercase af-muted" style={{ fontSize: '0.68rem', letterSpacing: '0.08em' }}>
+          Розмови
+        </div>
+        <div className="flex-grow-1 overflow-auto pb-2">
           {chats.length === 0 && (
-            <p className="text-secondary small p-3 mb-0">Розмов ще немає.</p>
+            <p className="af-muted small px-3 pt-2 mb-0">Розмов ще немає.</p>
           )}
           {chats.map((c) => (
             <div
               key={c.conversationId}
               onClick={() => setActiveId(c.conversationId)}
-              className={`d-flex justify-content-between align-items-center px-3 py-2 border-bottom border-secondary ${
-                activeId === c.conversationId ? 'bg-dark' : ''
+              className={`af-chat-item d-flex justify-content-between align-items-center ${
+                activeId === c.conversationId ? 'active' : ''
               }`}
-              style={{ cursor: 'pointer' }}
             >
               <div className="text-truncate">
-                <div className="text-truncate">{c.title}</div>
-                <div className="text-secondary small">{c.teamName || 'без команди'}</div>
+                <div className="text-truncate fw-medium" style={{ fontSize: '0.9rem' }}>{c.title}</div>
+                <div className="af-muted text-truncate" style={{ fontSize: '0.76rem' }}>
+                  {c.teamName || 'без команди'}
+                </div>
               </div>
               <button
-                className="btn btn-sm btn-link text-secondary p-0 ms-2"
+                className="af-del btn btn-sm btn-link af-muted p-0 ms-2"
                 onClick={(e) => removeChat(c.conversationId, e)}
                 title="Видалити"
               >
@@ -235,7 +252,7 @@ export default function ChatPage() {
       </aside>
 
       {/* Main */}
-      <main className="flex-grow-1 d-flex flex-column" style={{ minWidth: 0, backgroundColor: '#05070a' }}>
+      <main className="flex-grow-1 d-flex flex-column" style={{ minWidth: 0 }}>
         {error && (
           <div className="alert alert-danger m-3 mb-0 py-2 d-flex justify-content-between">
             <span>{error}</span>
@@ -243,19 +260,25 @@ export default function ChatPage() {
           </div>
         )}
 
-        {!activeId && (
-          <div className="flex-grow-1 d-flex justify-content-center align-items-center text-secondary">
-            Оберіть розмову або створіть нову.
-          </div>
-        )}
+        {!activeId && <ChatHero onNew={() => setModalChat('new')} />}
 
         {activeId && details && (
           <>
-            <header className="px-4 py-3 border-bottom border-secondary d-flex justify-content-between align-items-center">
-              <div>
-                <div className="fw-bold">{details.title}</div>
-                <div className="text-secondary small">
-                  {hasTeam ? `Команда: ${teamLabel}` : 'Команду не призначено'}
+            <header className="px-4 py-3 d-flex justify-content-between align-items-center" style={{ borderBottom: '1px solid var(--af-border)' }}>
+              <div className="d-flex align-items-center gap-2" style={{ minWidth: 0 }}>
+                {hasTeam && (
+                  <span
+                    className="af-avatar"
+                    style={{ background: agentGradient(teamLabel), width: 34, height: 34, borderRadius: 11 }}
+                  >
+                    {agentGlyph(teamLabel)}
+                  </span>
+                )}
+                <div style={{ minWidth: 0 }}>
+                  <div className="fw-bold text-truncate">{details.title}</div>
+                  <div className="af-muted small text-truncate">
+                    {hasTeam ? `Команда: ${teamLabel}` : 'Команду не призначено'}
+                  </div>
                 </div>
               </div>
               <button
@@ -273,9 +296,11 @@ export default function ChatPage() {
               </button>
             </header>
 
-            <div className="flex-grow-1 overflow-auto p-4 d-flex flex-column gap-3">
+            <div className="flex-grow-1 overflow-auto px-4 py-4 d-flex flex-column gap-3">
               {details.messages.length === 0 && (
-                <p className="text-secondary text-center">Повідомлень ще немає.</p>
+                <p className="af-muted text-center my-auto">
+                  Повідомлень ще немає. Напишіть перше — команда візьметься за роботу.
+                </p>
               )}
               {details.messages.map((m) => (
                 <MessageBubble
@@ -285,40 +310,33 @@ export default function ChatPage() {
                 />
               ))}
               {pendingReply && (
-                <div className="align-self-start text-secondary small">
-                  <span className="spinner-grow spinner-grow-sm me-1" role="status" aria-hidden="true" />
-                  {status || 'Агенти працюють…'}
-                  <button
-                    type="button"
-                    className="btn btn-link btn-sm text-secondary p-0 ms-2 align-baseline"
-                    style={{ fontSize: '0.75rem' }}
-                    onClick={() => setOverridePending(true)}
-                    title="Розблокувати введення, якщо відповідь не приходить"
-                  >
-                    розблокувати
-                  </button>
-                </div>
+                <TypingIndicator
+                  agent={activeAgent}
+                  onUnlock={() => setOverridePending(true)}
+                />
               )}
               <div ref={bottomRef} />
             </div>
 
-            <form onSubmit={send} className="p-3 border-top border-secondary d-flex gap-2">
-              <input
-                className="form-control bg-dark text-white border-secondary"
-                placeholder={
-                  !hasTeam
-                    ? 'Призначте команду в «⚙ Налаштування»'
-                    : pendingReply
-                      ? 'Зачекайте на відповідь агентів…'
-                      : 'Напишіть повідомлення…'
-                }
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                disabled={inputLocked}
-              />
-              <button className="btn btn-primary fw-bold" disabled={inputLocked || !input.trim()}>
-                {sending || pendingReply ? '…' : 'Надіслати'}
-              </button>
+            <form onSubmit={send} className="p-3" style={{ borderTop: '1px solid var(--af-border)' }}>
+              <div className="d-flex gap-2">
+                <input
+                  className="form-control"
+                  placeholder={
+                    !hasTeam
+                      ? 'Призначте команду в «⚙ Налаштування»'
+                      : pendingReply
+                        ? 'Зачекайте на відповідь агентів…'
+                        : 'Напишіть повідомлення…'
+                  }
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  disabled={inputLocked}
+                />
+                <button className="btn btn-primary fw-bold px-4" disabled={inputLocked || !input.trim()}>
+                  {sending || pendingReply ? '…' : 'Надіслати'}
+                </button>
+              </div>
             </form>
           </>
         )}
@@ -339,37 +357,226 @@ export default function ChatPage() {
   );
 }
 
+/* ─────────────────────────  Empty-state hero  ───────────────────────── */
+function ChatHero({ onNew }) {
+  return (
+    <div className="af-hero af-fade-in">
+      <div className="position-relative" style={{ zIndex: 1, maxWidth: 640 }}>
+        <div className="af-hero-badge mx-auto">
+          <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="url(#g)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <defs>
+              <linearGradient id="g" x1="0" y1="0" x2="24" y2="24">
+                <stop offset="0" stopColor="#b9a8ff" />
+                <stop offset="1" stopColor="#7cc4ff" />
+              </linearGradient>
+            </defs>
+            <rect x="3" y="11" width="18" height="10" rx="2" />
+            <circle cx="12" cy="5" r="2" />
+            <path d="M12 7v4" />
+            <line x1="8" y1="16" x2="8" y2="16" />
+            <line x1="16" y1="16" x2="16" y2="16" />
+          </svg>
+        </div>
+        <h2 className="fw-bold mb-2">
+          Ласкаво просимо до <span className="af-gradient-text">AgentForge</span>
+        </h2>
+        <p className="af-muted mb-4" style={{ fontSize: '1.02rem' }}>
+          Командуйте командами AI-агентів, які разом розв’язують ваші задачі — від
+          написання коду до аналізу та рецензування.
+        </p>
+
+        <div className="row g-3 mb-4 text-start">
+          <div className="col-12 col-md-4">
+            <div className="af-feature-card h-100">
+              <div className="af-feature-ico">👥</div>
+              <div className="fw-semibold mb-1">Команди агентів</div>
+              <div className="af-muted small">Кожен агент має роль, модель та інструменти.</div>
+            </div>
+          </div>
+          <div className="col-12 col-md-4">
+            <div className="af-feature-card h-100">
+              <div className="af-feature-ico">⚡</div>
+              <div className="fw-semibold mb-1">Реальний час</div>
+              <div className="af-muted small">Стежте за роботою агентів наживо.</div>
+            </div>
+          </div>
+          <div className="col-12 col-md-4">
+            <div className="af-feature-card h-100">
+              <div className="af-feature-ico">🔍</div>
+              <div className="fw-semibold mb-1">Прозорість</div>
+              <div className="af-muted small">Дивіться внесок кожного агента й трасування.</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="d-flex gap-2 justify-content-center">
+          <button className="btn btn-primary fw-bold px-4" onClick={onNew}>
+            ＋ Почати розмову
+          </button>
+          <Link to="/teams" className="btn btn-outline-secondary px-4">
+            Налаштувати команди
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────  Typing indicator  ───────────────────────── */
+function TypingIndicator({ agent, onUnlock }) {
+  const key = agent?.key;
+  const name = agent?.name;
+  const summary = isSummaryRole(key);
+  const label = summary
+    ? 'Команда формує підсумок…'
+    : name
+      ? `${name} працює…`
+      : 'Агенти працюють…';
+  return (
+    <div className="d-flex align-items-center gap-2 af-fade-in">
+      {key && (
+        <span className="af-avatar" style={{ background: agentGradient(key) }}>
+          {agentGlyph(key)}
+        </span>
+      )}
+      <div className="af-typing">
+        <span className="af-typing-dots"><span /><span /><span /></span>
+        <span>{label}</span>
+      </div>
+      <button
+        type="button"
+        className="btn btn-link btn-sm af-muted p-0 ms-1"
+        style={{ fontSize: '0.75rem' }}
+        onClick={onUnlock}
+        title="Розблокувати введення, якщо відповідь не приходить"
+      >
+        розблокувати
+      </button>
+    </div>
+  );
+}
+
+/* ─────────────────────────  Message bubble  ───────────────────────── */
 function MessageBubble({ message, onShowTrace }) {
   const isUser = message.role === 'user';
   const isSystem = message.role === 'system';
 
   if (isSystem) {
     return (
-      <div className="align-self-center text-warning small text-center" style={{ maxWidth: '80%' }}>
-        {message.content}
+      <div className="align-self-center text-center af-fade-in" style={{ maxWidth: '80%' }}>
+        <span className="badge" style={{ background: 'rgba(255,92,122,0.14)', color: '#ffb3c1', border: '1px solid rgba(255,92,122,0.3)' }}>
+          {message.content}
+        </span>
       </div>
     );
   }
 
+  const displayName = isUser ? 'Ви' : prettyName(message.senderName || 'Агент');
+  const avatarKey = isUser ? 'you' : message.senderName || 'agent';
+  const content = isUser ? message.content : stripRolePrefix(message.content, message.senderName);
+
   return (
-    <div className={`align-self-${isUser ? 'end text-end' : 'start'}`} style={{ maxWidth: '80%' }}>
-      <div className="text-secondary small mb-1">{message.senderName || (isUser ? 'Ви' : 'Агент')}</div>
-      <div
-        className={`p-2 rounded-3 ${
-          isUser ? 'bg-primary text-white' : 'bg-dark text-light border border-secondary'
-        }`}
-        style={{ whiteSpace: 'pre-wrap' }}
+    <div className={`af-msg-row af-fade-in ${isUser ? 'user' : ''}`}>
+      <span
+        className="af-avatar"
+        style={{ background: isUser ? 'linear-gradient(135deg, #4a5578, #2b3350)' : agentGradient(avatarKey) }}
       >
-        {message.content}
+        {agentGlyph(avatarKey)}
+      </span>
+      <div style={{ minWidth: 0, maxWidth: '100%' }}>
+        <div className={`small af-muted mb-1 ${isUser ? 'text-end' : ''}`}>{displayName}</div>
+        <div className={`af-bubble ${isUser ? 'af-bubble-user' : 'af-bubble-agent'}`}>
+          {isUser ? (
+            <span style={{ whiteSpace: 'pre-wrap' }}>{content}</span>
+          ) : (
+            <Markdown>{content}</Markdown>
+          )}
+        </div>
+        {!isUser && message.agentSessionId && (
+          <Contributions sessionId={message.agentSessionId} onShowTrace={onShowTrace} />
+        )}
       </div>
-      {message.agentSessionId && (
-        <div className="mt-1">
-          <button
-            className="btn btn-sm btn-link text-secondary p-0 small"
-            onClick={() => onShowTrace(message.agentSessionId)}
-          >
-            переглянути трасування
-          </button>
+    </div>
+  );
+}
+
+/* ───────────────  Multi-agent contributions (lazy-loaded trace)  ─────────────── */
+function Contributions({ sessionId, onShowTrace }) {
+  const [open, setOpen] = useState(false);
+  const [trace, setTrace] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  async function toggle() {
+    const next = !open;
+    setOpen(next);
+    if (next && !trace) {
+      setLoading(true);
+      try {
+        setTrace(await api.trace(sessionId));
+      } catch {
+        setTrace({ trace: [] });
+      } finally {
+        setLoading(false);
+      }
+    }
+  }
+
+  const steps = trace?.trace || [];
+  const agentCount = new Set(steps.map((s) => s.agentRole)).size;
+
+  return (
+    <div className="af-contrib">
+      <button type="button" className="af-contrib-head" onClick={toggle}>
+        <span style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>▸</span>
+        <span className="fw-medium">Внесок команди</span>
+        {trace && (
+          <span className="af-muted">
+            · {steps.length} {steps.length === 1 ? 'крок' : 'кроків'}
+            {agentCount > 1 ? ` · ${agentCount} агентів` : ''}
+          </span>
+        )}
+        <span className="ms-auto af-muted" style={{ fontSize: '0.72rem' }}>
+          {open ? 'згорнути' : 'показати'}
+        </span>
+      </button>
+
+      {open && (
+        <div className="af-contrib-body af-fade-in">
+          {loading && <div className="af-muted small py-2">Завантаження…</div>}
+          {!loading && steps.length === 0 && (
+            <div className="af-muted small py-2">Окремих кроків не зафіксовано.</div>
+          )}
+          {steps.map((s, i) => {
+            const role = roleFromTagged(s.output, s.agentRole);
+            return (
+              <div key={i} className="af-contrib-step">
+                <div className="d-flex align-items-center gap-2 mb-1">
+                  <span className="af-avatar" style={{ background: agentGradient(role), width: 24, height: 24, fontSize: '0.62rem', borderRadius: 7 }}>
+                    {agentGlyph(role)}
+                  </span>
+                  <span className="fw-medium small">{prettyName(role)}</span>
+                  {s.toolsUsed?.length > 0 && (
+                    <span className="af-muted" style={{ fontSize: '0.72rem' }}>
+                      🔧 {s.toolsUsed.join(', ')}
+                    </span>
+                  )}
+                </div>
+                <div className="af-md" style={{ fontSize: '0.88rem' }}>
+                  <Markdown>{stripRolePrefix(s.output, s.agentRole)}</Markdown>
+                </div>
+              </div>
+            );
+          })}
+          {trace && (
+            <button
+              type="button"
+              className="btn btn-sm btn-link af-muted p-0 mt-1"
+              style={{ fontSize: '0.78rem' }}
+              onClick={() => onShowTrace(sessionId)}
+            >
+              переглянути повне трасування →
+            </button>
+          )}
         </div>
       )}
     </div>
