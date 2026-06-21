@@ -21,3 +21,80 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #555;
 }
+
+/* Inline help icon (?) with a hover/focus tooltip. */
+.info-hint {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin-left: 6px;
+  border-radius: 50%;
+  border: 1px solid #5a6472;
+  color: #9aa4b2;
+  background: transparent;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
+  vertical-align: middle;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.info-hint:hover,
+.info-hint:focus-visible {
+  color: #fff;
+  border-color: #0d6efd;
+  outline: none;
+}
+
+/* Tooltip bubble — portaled to <body> with fixed positioning so it is never
+   clipped by an overflow:auto ancestor (e.g. a modal). The icon sets `left`
+   and `top` inline; CSS handles the offset transform and the arrow. */
+.info-hint__bubble {
+  position: fixed;
+  width: max-content;
+  max-width: 260px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #11151c;
+  border: 1px solid #2c3440;
+  color: #d4dae3;
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.35;
+  text-align: left;
+  white-space: normal;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  z-index: 2000;
+}
+
+/* `top`/`left` point at the icon edge; shift the bubble onto its own side. */
+.info-hint__bubble--top {
+  transform: translate(-50%, -100%);
+}
+
+.info-hint__bubble--below {
+  transform: translate(-50%, 0);
+}
+
+.info-hint__bubble::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+}
+
+.info-hint__bubble--top::after {
+  top: 100%;
+  border-top-color: #2c3440;
+}
+
+.info-hint__bubble--below::after {
+  bottom: 100%;
+  border-bottom-color: #2c3440;
+}
