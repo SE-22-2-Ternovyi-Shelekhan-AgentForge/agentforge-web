@@ -1,5 +1,5 @@
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { useAuth } from '../auth.jsx';
+import { useAuth } from '../auth-context.js';
 import icon from '../assets/agentForge-icon.png';
 
 export default function Layout() {

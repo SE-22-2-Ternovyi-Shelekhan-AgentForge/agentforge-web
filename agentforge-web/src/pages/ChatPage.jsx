@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as signalR from '@microsoft/signalr';
 import { api, API_BASE, getToken } from '../api';
-import { useAuth } from '../auth.jsx';
+import { useAuth } from '../auth-context.js';
 import TraceModal from '../components/TraceModal.jsx';
 import ChatModal from '../components/ChatModal.jsx';
 
