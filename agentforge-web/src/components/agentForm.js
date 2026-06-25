@@ -5,7 +5,7 @@ export const EMPTY_AGENT = {
   name: '',
   role: '',
   systemPrompt: '',
-  modelName: 'qwen2.5:7b',
+  modelName: 'qwen2.5:1.5b',
   temperature: 0.2,
   tools: '',
 };
@@ -16,7 +16,8 @@ export const MODEL_GROUPS = [
   {
     label: 'Ollama (локальні)',
     models: [
-      { value: 'qwen2.5:7b', label: 'Qwen 2.5 · 7B (за замовчуванням)' },
+      { value: 'qwen2.5:1.5b', label: 'Qwen 2.5 · 1.5B (швидка)' },
+      { value: 'qwen2.5:7b', label: 'Qwen 2.5 · 7B' },
       { value: 'qwen2.5:14b', label: 'Qwen 2.5 · 14B' },
       { value: 'llama3.1:8b', label: 'Llama 3.1 · 8B' },
       { value: 'llama3.2:3b', label: 'Llama 3.2 · 3B' },

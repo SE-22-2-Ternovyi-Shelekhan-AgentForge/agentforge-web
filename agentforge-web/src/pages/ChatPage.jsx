@@ -29,6 +29,8 @@ export default function ChatPage() {
   // Whether the user manually dismissed the "waiting for agents" lock (escape
   // hatch for the rare case a session never produces a result/error).
   const [overridePending, setOverridePending] = useState(false);
+  // Token-by-token streaming bubble for the currently-active agent.
+  const [streamingMessage, setStreamingMessage] = useState(null); // { agentRole, content }
 
   const connRef = useRef(null);
   const [connReady, setConnReady] = useState(false);
@@ -76,8 +78,7 @@ export default function ChatPage() {
 
     conn.on('MessageAppended', (msg) => {
       setActiveAgent(null);
-      // Appending the assistant reply makes the last message non-user, which
-      // clears the derived "waiting" lock automatically.
+      setStreamingMessage(null);
       setDetails((prev) =>
         prev && msg.conversationId === prev.conversationId
           ? { ...prev, messages: [...prev.messages, msg] }
@@ -86,9 +87,25 @@ export default function ChatPage() {
     });
 
     conn.on('SessionEvent', (evt) => {
-      // The orchestrator DTO tags this field as `agent_role` (JsonPropertyName),
-      // so accept both spellings. Surface the working agent in the typing chip.
       const role = evt?.agentRole ?? evt?.agent_role ?? null;
+      const eventType = evt?.eventType ?? evt?.event_type ?? null;
+
+      if (eventType === 'agent_token') {
+        const token = evt?.payload?.token ?? '';
+        if (token) {
+          setStreamingMessage((prev) =>
+            prev?.agentRole === role
+              ? { agentRole: role, content: prev.content + token }
+              : { agentRole: role, content: token },
+          );
+        }
+        return;
+      }
+
+      if (eventType === 'agent_started') {
+        setStreamingMessage({ agentRole: role, content: '' });
+      }
+
       setActiveAgent(role ? { key: role, name: prettyName(role) } : { key: null, name: null });
     });
 
@@ -141,10 +158,10 @@ export default function ChatPage() {
     };
   }, [connReady, activeId]);
 
-  // Auto-scroll to the latest message.
+  // Auto-scroll to the latest message or streaming token.
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [details?.messages, activeAgent]);
+  }, [details?.messages, activeAgent, streamingMessage?.content]);
 
   async function onChatSaved(id) {
     setModalChat(null);
@@ -309,12 +326,18 @@ export default function ChatPage() {
                   onShowTrace={setTraceSession}
                 />
               ))}
-              {pendingReply && (
+              {pendingReply && streamingMessage?.content ? (
+                <StreamingBubble
+                  agentRole={streamingMessage.agentRole}
+                  content={streamingMessage.content}
+                  onUnlock={() => setOverridePending(true)}
+                />
+              ) : pendingReply ? (
                 <TypingIndicator
                   agent={activeAgent}
                   onUnlock={() => setOverridePending(true)}
                 />
-              )}
+              ) : null}
               <div ref={bottomRef} />
             </div>
 
@@ -452,6 +475,33 @@ function TypingIndicator({ agent, onUnlock }) {
       >
         розблокувати
       </button>
+    </div>
+  );
+}
+
+/* ─────────────────────────  Streaming bubble  ─────────────────────── */
+function StreamingBubble({ agentRole, content, onUnlock }) {
+  return (
+    <div className="af-msg-row af-fade-in">
+      <span className="af-avatar" style={{ background: agentGradient(agentRole || 'agent') }}>
+        {agentGlyph(agentRole || 'agent')}
+      </span>
+      <div style={{ minWidth: 0, maxWidth: '100%' }}>
+        <div className="small af-muted mb-1">{prettyName(agentRole || 'agent')}</div>
+        <div className="af-bubble af-bubble-agent">
+          <Markdown>{content}</Markdown>
+          <span style={{ display: 'inline-block', width: '0.55em', height: '1em', background: 'currentColor', verticalAlign: 'text-bottom', marginLeft: 2, animation: 'af-blink 1s step-end infinite', opacity: 0.7 }} />
+        </div>
+        <button
+          type="button"
+          className="btn btn-link btn-sm af-muted p-0 mt-1"
+          style={{ fontSize: '0.75rem' }}
+          onClick={onUnlock}
+          title="Розблокувати введення"
+        >
+          розблокувати
+        </button>
+      </div>
     </div>
   );
 }
