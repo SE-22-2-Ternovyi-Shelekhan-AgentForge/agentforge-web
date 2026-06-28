@@ -29,8 +29,11 @@ export default function ChatPage() {
   // Whether the user manually dismissed the "waiting for agents" lock (escape
   // hatch for the rare case a session never produces a result/error).
   const [overridePending, setOverridePending] = useState(false);
-  // Token-by-token streaming bubble for the currently-active agent.
-  const [streamingMessage, setStreamingMessage] = useState(null); // { agentRole, content }
+  // Live multi-agent dialogue for the in-flight session. Each item is either an
+  // agent turn (streamed token-by-token, frozen when done) or a short coordination
+  // note from the supervisor. This makes the back-and-forth visible like a group chat.
+  // Items: { kind:'turn', agentRole, content, round, done } | { kind:'note', content }
+  const [liveTurns, setLiveTurns] = useState([]);
 
   const connRef = useRef(null);
   const [connReady, setConnReady] = useState(false);
@@ -78,7 +81,7 @@ export default function ChatPage() {
 
     conn.on('MessageAppended', (msg) => {
       setActiveAgent(null);
-      setStreamingMessage(null);
+      setLiveTurns([]);
       setDetails((prev) =>
         prev && msg.conversationId === prev.conversationId
           ? { ...prev, messages: [...prev.messages, msg] }
@@ -89,21 +92,44 @@ export default function ChatPage() {
     conn.on('SessionEvent', (evt) => {
       const role = evt?.agentRole ?? evt?.agent_role ?? null;
       const eventType = evt?.eventType ?? evt?.event_type ?? null;
+      const payload = evt?.payload ?? {};
 
       if (eventType === 'agent_token') {
-        const token = evt?.payload?.token ?? '';
+        const token = payload?.token ?? '';
         if (token) {
-          setStreamingMessage((prev) =>
-            prev?.agentRole === role
-              ? { agentRole: role, content: prev.content + token }
-              : { agentRole: role, content: token },
-          );
+          // Append to the last turn (the currently-active agent), preserving the
+          // earlier turns so the whole dialogue stays on screen.
+          setLiveTurns((prev) => {
+            if (prev.length === 0) return [{ kind: 'turn', agentRole: role, content: token, done: false }];
+            const last = prev[prev.length - 1];
+            if (last.kind === 'turn' && last.agentRole === role && !last.done) {
+              return [...prev.slice(0, -1), { ...last, content: last.content + token }];
+            }
+            return [...prev, { kind: 'turn', agentRole: role, content: token, done: false }];
+          });
         }
         return;
       }
 
       if (eventType === 'agent_started') {
-        setStreamingMessage({ agentRole: role, content: '' });
+        // Freeze any still-open previous turn, then open a fresh bubble for this agent.
+        setLiveTurns((prev) => {
+          const frozen = prev.map((t) => (t.kind === 'turn' ? { ...t, done: true } : t));
+          return [...frozen, { kind: 'turn', agentRole: role, content: '', round: payload?.round, done: false }];
+        });
+      } else if (eventType === 'agent_finished') {
+        setLiveTurns((prev) =>
+          prev.map((t, i) => (i === prev.length - 1 && t.kind === 'turn' ? { ...t, done: true } : t)),
+        );
+      } else if (eventType === 'supervisor_routed') {
+        // Only surface meaningful coordination decisions (round change / approval /
+        // cap reached) — not the routine per-agent dispatch ("раунд N: черга …").
+        const reasoning = payload?.reasoning ?? '';
+        const isDecision =
+          payload?.next === 'END' || /виправлення|схвалив|межі раундів|завершую/i.test(reasoning);
+        if (isDecision && reasoning) {
+          setLiveTurns((prev) => [...prev, { kind: 'note', content: reasoning }]);
+        }
       }
 
       setActiveAgent(role ? { key: role, name: prettyName(role) } : { key: null, name: null });
@@ -111,6 +137,7 @@ export default function ChatPage() {
 
     conn.on('SessionFailed', (err) => {
       setActiveAgent(null);
+      setLiveTurns([]);
       // The orchestrator persists a system message on failure but only pushes
       // the SessionFailed event. Mirror that message locally so the chat (and
       // the derived lock) matches what a page reload would show.
@@ -158,10 +185,12 @@ export default function ChatPage() {
     };
   }, [connReady, activeId]);
 
-  // Auto-scroll to the latest message or streaming token.
+  // Auto-scroll to the latest message or streamed token.
+  const liveLen = liveTurns.length;
+  const liveTail = liveTurns[liveTurns.length - 1]?.content;
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [details?.messages, activeAgent, streamingMessage?.content]);
+  }, [details?.messages, activeAgent, liveLen, liveTail]);
 
   async function onChatSaved(id) {
     setModalChat(null);
@@ -319,20 +348,30 @@ export default function ChatPage() {
                   Повідомлень ще немає. Напишіть перше — команда візьметься за роботу.
                 </p>
               )}
-              {details.messages.map((m) => (
+              {details.messages.map((m, i) => (
                 <MessageBubble
                   key={m.chatMessageId || `${m.timestamp}-${m.content}`}
                   message={m}
+                  autoOpen={i === details.messages.length - 1}
                   onShowTrace={setTraceSession}
                 />
               ))}
-              {pendingReply && streamingMessage?.content ? (
-                <StreamingBubble
-                  agentRole={streamingMessage.agentRole}
-                  content={streamingMessage.content}
-                  onUnlock={() => setOverridePending(true)}
-                />
-              ) : pendingReply ? (
+              {pendingReply &&
+                liveTurns.map((t, i) =>
+                  t.kind === 'note' ? (
+                    <CoordinationNote key={`n${i}`} text={t.content} />
+                  ) : (
+                    <StreamingBubble
+                      key={`t${i}`}
+                      agentRole={t.agentRole}
+                      content={t.content}
+                      streaming={!t.done && i === liveTurns.length - 1}
+                      onUnlock={() => setOverridePending(true)}
+                    />
+                  ),
+                )}
+              {pendingReply &&
+              (liveTurns.length === 0 || liveTurns[liveTurns.length - 1]?.done) ? (
                 <TypingIndicator
                   agent={activeAgent}
                   onUnlock={() => setOverridePending(true)}
@@ -479,8 +518,10 @@ function TypingIndicator({ agent, onUnlock }) {
   );
 }
 
-/* ─────────────────────────  Streaming bubble  ─────────────────────── */
-function StreamingBubble({ agentRole, content, onUnlock }) {
+/* ─────────────────────────  Agent turn / streaming bubble  ─────────────────────── */
+// One agent's turn in the live dialogue. While `streaming` it shows a blinking
+// caret and an unlock escape hatch; once frozen it renders as a plain agent bubble.
+function StreamingBubble({ agentRole, content, streaming = true, onUnlock }) {
   return (
     <div className="af-msg-row af-fade-in">
       <span className="af-avatar" style={{ background: agentGradient(agentRole || 'agent') }}>
@@ -490,24 +531,39 @@ function StreamingBubble({ agentRole, content, onUnlock }) {
         <div className="small af-muted mb-1">{prettyName(agentRole || 'agent')}</div>
         <div className="af-bubble af-bubble-agent">
           <Markdown>{content}</Markdown>
-          <span style={{ display: 'inline-block', width: '0.55em', height: '1em', background: 'currentColor', verticalAlign: 'text-bottom', marginLeft: 2, animation: 'af-blink 1s step-end infinite', opacity: 0.7 }} />
+          {streaming && (
+            <span style={{ display: 'inline-block', width: '0.55em', height: '1em', background: 'currentColor', verticalAlign: 'text-bottom', marginLeft: 2, animation: 'af-blink 1s step-end infinite', opacity: 0.7 }} />
+          )}
         </div>
-        <button
-          type="button"
-          className="btn btn-link btn-sm af-muted p-0 mt-1"
-          style={{ fontSize: '0.75rem' }}
-          onClick={onUnlock}
-          title="Розблокувати введення"
-        >
-          розблокувати
-        </button>
+        {streaming && (
+          <button
+            type="button"
+            className="btn btn-link btn-sm af-muted p-0 mt-1"
+            style={{ fontSize: '0.75rem' }}
+            onClick={onUnlock}
+            title="Розблокувати введення"
+          >
+            розблокувати
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
+/* ─────────────────────────  Supervisor coordination note  ─────────────────────── */
+// A short, centered line narrating the coordinator's decision between rounds
+// (e.g. "рецензент має зауваження — раунд 2 на виправлення").
+function CoordinationNote({ text }) {
+  return (
+    <div className="align-self-center text-center af-fade-in" style={{ maxWidth: '85%' }}>
+      <span className="af-coord-note">🧭 {text}</span>
+    </div>
+  );
+}
+
 /* ─────────────────────────  Message bubble  ───────────────────────── */
-function MessageBubble({ message, onShowTrace }) {
+function MessageBubble({ message, autoOpen = false, onShowTrace }) {
   const isUser = message.role === 'user';
   const isSystem = message.role === 'system';
 
@@ -543,7 +599,7 @@ function MessageBubble({ message, onShowTrace }) {
           )}
         </div>
         {!isUser && message.agentSessionId && (
-          <Contributions sessionId={message.agentSessionId} onShowTrace={onShowTrace} />
+          <Contributions sessionId={message.agentSessionId} autoOpen={autoOpen} onShowTrace={onShowTrace} />
         )}
       </div>
     </div>
@@ -551,28 +607,52 @@ function MessageBubble({ message, onShowTrace }) {
 }
 
 /* ───────────────  Multi-agent contributions (lazy-loaded trace)  ─────────────── */
-function Contributions({ sessionId, onShowTrace }) {
+function Contributions({ sessionId, autoOpen = false, onShowTrace }) {
   const [open, setOpen] = useState(false);
   const [trace, setTrace] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  async function toggle() {
-    const next = !open;
-    setOpen(next);
-    if (next && !trace) {
-      setLoading(true);
-      try {
-        setTrace(await api.trace(sessionId));
-      } catch {
-        setTrace({ trace: [] });
-      } finally {
-        setLoading(false);
-      }
+  async function load() {
+    if (trace) return;
+    setLoading(true);
+    try {
+      setTrace(await api.trace(sessionId));
+    } catch {
+      setTrace({ trace: [] });
+    } finally {
+      setLoading(false);
     }
   }
 
+  async function toggle() {
+    const next = !open;
+    setOpen(next);
+    if (next) await load();
+  }
+
+  // For the latest message, eagerly load so a real multi-round dialogue auto-expands.
+  useEffect(() => {
+    if (autoOpen) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, autoOpen]);
+
   const steps = trace?.trace || [];
   const agentCount = new Set(steps.map((s) => s.agentRole)).size;
+
+  // Auto-open once loaded if the team actually went back and forth (more than one step).
+  useEffect(() => {
+    if (autoOpen && trace && steps.length > 1) setOpen(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trace, autoOpen]);
+
+  // Per-role pass counter so each step can be labelled "прохід k" in a multi-round run.
+  const passByIndex = [];
+  const seen = {};
+  steps.forEach((s, i) => {
+    seen[s.agentRole] = (seen[s.agentRole] || 0) + 1;
+    passByIndex[i] = seen[s.agentRole];
+  });
+  const multiRound = Object.values(seen).some((n) => n > 1);
 
   return (
     <div className="af-contrib">
@@ -605,6 +685,11 @@ function Contributions({ sessionId, onShowTrace }) {
                     {agentGlyph(role)}
                   </span>
                   <span className="fw-medium small">{prettyName(role)}</span>
+                  {multiRound && (
+                    <span className="af-muted" style={{ fontSize: '0.72rem' }}>
+                      · прохід {passByIndex[i]}
+                    </span>
+                  )}
                   {s.toolsUsed?.length > 0 && (
                     <span className="af-muted" style={{ fontSize: '0.72rem' }}>
                       🔧 {s.toolsUsed.join(', ')}

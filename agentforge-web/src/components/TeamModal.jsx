@@ -19,6 +19,10 @@ import { EMPTY_AGENT, toolsToArray } from './agentForm.js';
 export default function TeamModal({ teamId, initialName = '', onClose, onSaved, onChanged }) {
   const [team, setTeam] = useState(null); // server team object once it exists
   const [name, setName] = useState(initialName);
+  // Team-level orchestration settings (empty string → use server/worker default).
+  const [maxRounds, setMaxRounds] = useState('');
+  const [maxIterations, setMaxIterations] = useState('');
+  const [supervisorPrompt, setSupervisorPrompt] = useState('');
   const [agentDraft, setAgentDraft] = useState(EMPTY_AGENT);
   const [editing, setEditing] = useState(null); // agent draft with tools as string
   const [error, setError] = useState(null);
@@ -38,6 +42,9 @@ export default function TeamModal({ teamId, initialName = '', onClose, onSaved, 
         const t = list.find((x) => x.agentTeamId === teamId) || null;
         setTeam(t);
         setName(t?.name || '');
+        setMaxRounds(t?.maxRounds != null ? String(t.maxRounds) : '');
+        setMaxIterations(t?.maxIterations != null ? String(t.maxIterations) : '');
+        setSupervisorPrompt(t?.supervisorPrompt || '');
       })
       .catch((e) => !cancelled && setError(e.message))
       .finally(() => !cancelled && setLoading(false));
@@ -54,26 +61,41 @@ export default function TeamModal({ teamId, initialName = '', onClose, onSaved, 
     return t;
   }
 
-  // Make sure a team row exists on the server; create it on first need.
+  // Parse a bounded integer from an input string; '' → null (use default).
+  function intOrNull(value, min, max) {
+    const s = String(value).trim();
+    if (s === '') return null;
+    const n = Math.round(Number(s));
+    if (Number.isNaN(n)) return null;
+    return Math.min(max, Math.max(min, n));
+  }
+
+  // Make sure a team row exists on the server (create on first need), then persist
+  // the team name and team-level settings. Spreads `...current` so the existing
+  // agents are preserved (the PUT maps the whole AgentTeamDto onto the entity).
   async function ensureTeam() {
-    if (team?.agentTeamId) {
-      // Persist a pending rename before we attach agents.
-      if (name.trim() && name.trim() !== team.name) {
-        await api.updateTeam({ ...team, name: name.trim() });
-        await reloadTeam(team.agentTeamId);
-      }
-      return team.agentTeamId;
-    }
-    const trimmed = name.trim();
-    if (!trimmed) throw new Error('Спершу вкажіть назву команди.');
-    const before = (await api.teams()).map((t) => t.agentTeamId);
-    const res = await api.createTeam(trimmed);
-    let id = res?.agentTeamId;
+    let id = team?.agentTeamId;
+    let current = team;
     if (!id) {
-      const after = await api.teams();
-      id = after.find((t) => !before.includes(t.agentTeamId))?.agentTeamId;
+      const trimmed = name.trim();
+      if (!trimmed) throw new Error('Спершу вкажіть назву команди.');
+      const before = (await api.teams()).map((t) => t.agentTeamId);
+      const res = await api.createTeam(trimmed);
+      id = res?.agentTeamId;
+      if (!id) {
+        const after = await api.teams();
+        id = after.find((t) => !before.includes(t.agentTeamId))?.agentTeamId;
+      }
+      if (!id) throw new Error('Не вдалося створити команду.');
+      current = await reloadTeam(id);
     }
-    if (!id) throw new Error('Не вдалося створити команду.');
+    await api.updateTeam({
+      ...current,
+      name: name.trim() || current.name,
+      maxRounds: intOrNull(maxRounds, 1, 5),
+      maxIterations: intOrNull(maxIterations, 2, 30),
+      supervisorPrompt: supervisorPrompt.trim() || null,
+    });
     await reloadTeam(id);
     return id;
   }
@@ -193,6 +215,54 @@ export default function TeamModal({ teamId, initialName = '', onClose, onSaved, 
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                 />
+              </div>
+
+              <div className="border border-secondary rounded-3 p-3 mb-3">
+                <div className="text-secondary small fw-medium mb-2">Налаштування команди</div>
+                <div className="row g-2">
+                  <div className="col-6">
+                    <label className="form-label text-secondary small mb-1">
+                      Макс. раундів ревʼю <span className="text-secondary" style={{ opacity: 0.6 }}>· 1–5</span>
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="5"
+                      className="form-control form-control-sm bg-dark text-white border-secondary"
+                      placeholder="2"
+                      value={maxRounds}
+                      onChange={(e) => setMaxRounds(e.target.value)}
+                    />
+                  </div>
+                  <div className="col-6">
+                    <label className="form-label text-secondary small mb-1">
+                      Макс. ітерацій <span className="text-secondary" style={{ opacity: 0.6 }}>· safety, 2–30</span>
+                    </label>
+                    <input
+                      type="number"
+                      min="2"
+                      max="30"
+                      className="form-control form-control-sm bg-dark text-white border-secondary"
+                      placeholder="10"
+                      value={maxIterations}
+                      onChange={(e) => setMaxIterations(e.target.value)}
+                    />
+                  </div>
+                  <div className="col-12">
+                    <label className="form-label text-secondary small mb-1">Промпт супервізора</label>
+                    <textarea
+                      rows={2}
+                      className="form-control form-control-sm bg-dark text-white border-secondary"
+                      placeholder="Залиште порожнім для стандартної логіки…"
+                      value={supervisorPrompt}
+                      onChange={(e) => setSupervisorPrompt(e.target.value)}
+                    />
+                    <div className="text-secondary mt-1" style={{ fontSize: '0.72rem' }}>
+                      Якщо задано — рішеннями про раунди керує LLM-супервізор із цим промптом.
+                      Порожнє — детермінована логіка (цикл триває, поки рецензент не схвалить).
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div className="text-secondary small fw-medium mb-2">

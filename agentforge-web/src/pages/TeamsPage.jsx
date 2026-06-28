@@ -10,6 +10,8 @@ export default function TeamsPage() {
   const [agentForms, setAgentForms] = useState({}); // teamId -> agent draft
   const [editing, setEditing] = useState(null); // agent being edited (with tools as string)
   const [renaming, setRenaming] = useState(null); // { id, value } | null
+  const [settingsDraft, setSettingsDraft] = useState({}); // teamId -> { maxRounds, maxIterations, supervisorPrompt }
+  const [savingSettings, setSavingSettings] = useState(null); // teamId currently saving
 
   async function load() {
     try {
@@ -58,6 +60,52 @@ export default function TeamsPage() {
       await load();
     } catch (e) {
       setError(e.message);
+    }
+  }
+
+  // Parse a bounded integer from an input string; '' → null (use worker default).
+  function intOrNull(value, min, max) {
+    const s = String(value ?? '').trim();
+    if (s === '') return null;
+    const n = Math.round(Number(s));
+    if (Number.isNaN(n)) return null;
+    return Math.min(max, Math.max(min, n));
+  }
+
+  // Current value of a team-level setting: the unsaved draft if present, else the
+  // server value, normalised to a string for the input.
+  function settingFor(team, key) {
+    const d = settingsDraft[team.agentTeamId];
+    if (d && key in d) return d[key];
+    const v = team[key];
+    return v == null ? '' : String(v);
+  }
+
+  function setSetting(teamId, key, val) {
+    setSettingsDraft((prev) => ({ ...prev, [teamId]: { ...prev[teamId], [key]: val } }));
+  }
+
+  async function saveSettings(team) {
+    setSavingSettings(team.agentTeamId);
+    setError(null);
+    try {
+      // Spread `...team` so existing agents are preserved by the PUT.
+      await api.updateTeam({
+        ...team,
+        maxRounds: intOrNull(settingFor(team, 'maxRounds'), 1, 5),
+        maxIterations: intOrNull(settingFor(team, 'maxIterations'), 2, 30),
+        supervisorPrompt: (settingFor(team, 'supervisorPrompt') || '').trim() || null,
+      });
+      setSettingsDraft((prev) => {
+        const next = { ...prev };
+        delete next[team.agentTeamId];
+        return next;
+      });
+      await load();
+    } catch (e2) {
+      setError(e2.message);
+    } finally {
+      setSavingSettings(null);
     }
   }
 
@@ -203,6 +251,58 @@ export default function TeamsPage() {
                 )}
               </div>
               <div className="card-body">
+                <div className="border border-secondary rounded-3 p-3 mb-3">
+                  <div className="text-secondary small fw-medium mb-2">Налаштування команди</div>
+                  <div className="row g-2">
+                    <div className="col-6 col-md-3">
+                      <label className="form-label text-secondary small mb-1">Макс. раундів</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="5"
+                        className="form-control form-control-sm bg-dark text-white border-secondary"
+                        placeholder="2"
+                        value={settingFor(team, 'maxRounds')}
+                        onChange={(e) => setSetting(team.agentTeamId, 'maxRounds', e.target.value)}
+                      />
+                    </div>
+                    <div className="col-6 col-md-3">
+                      <label className="form-label text-secondary small mb-1">Макс. ітерацій</label>
+                      <input
+                        type="number"
+                        min="2"
+                        max="30"
+                        className="form-control form-control-sm bg-dark text-white border-secondary"
+                        placeholder="10"
+                        value={settingFor(team, 'maxIterations')}
+                        onChange={(e) => setSetting(team.agentTeamId, 'maxIterations', e.target.value)}
+                      />
+                    </div>
+                    <div className="col-12">
+                      <label className="form-label text-secondary small mb-1">Промпт супервізора</label>
+                      <textarea
+                        rows={2}
+                        className="form-control form-control-sm bg-dark text-white border-secondary"
+                        placeholder="Залиште порожнім для стандартної логіки…"
+                        value={settingFor(team, 'supervisorPrompt')}
+                        onChange={(e) => setSetting(team.agentTeamId, 'supervisorPrompt', e.target.value)}
+                      />
+                      <div className="text-secondary mt-1" style={{ fontSize: '0.72rem' }}>
+                        Якщо задано — рішеннями про раунди керує LLM-супервізор із цим промптом;
+                        порожнє — детермінована логіка (поки рецензент не схвалить).
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-outline-primary mt-2"
+                    onClick={() => saveSettings(team)}
+                    disabled={savingSettings === team.agentTeamId}
+                  >
+                    {savingSettings === team.agentTeamId ? '…' : 'Зберегти налаштування'}
+                  </button>
+                </div>
+
                 {(team.agents || []).length === 0 && (
                   <p className="text-secondary small">У команді ще немає агентів.</p>
                 )}
